@@ -16,6 +16,8 @@ const Index = () => {
     totalOut: 0,
     peakCount: 0,
     detections: [],
+    childCount: 0,
+    adultCount: 0,
   });
   const [alerts, setAlerts] = useState<AlertEntry[]>([]);
   const [toastAlert, setToastAlert] = useState<AlertEntry | null>(null);

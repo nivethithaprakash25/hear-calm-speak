@@ -130,9 +130,18 @@ export default function StatsPanel({ stats, alerts }: Props) {
             Live Detections
           </span>
           {stats.detections.length > 0 && (
-            <span className="ml-auto text-xs font-mono bg-primary/20 text-primary px-1.5 py-0.5 rounded-full">
-              {stats.detections.length} person{stats.detections.length !== 1 ? "s" : ""}
-            </span>
+            <div className="ml-auto flex items-center gap-1.5">
+              {stats.adultCount > 0 && (
+                <span className="text-[10px] font-mono bg-primary/20 text-primary px-1.5 py-0.5 rounded-full">
+                  {stats.adultCount} adult{stats.adultCount !== 1 ? "s" : ""}
+                </span>
+              )}
+              {stats.childCount > 0 && (
+                <span className="text-[10px] font-mono bg-warning/20 text-warning px-1.5 py-0.5 rounded-full">
+                  {stats.childCount} child{stats.childCount !== 1 ? "ren" : ""}
+                </span>
+              )}
+            </div>
           )}
         </div>
         <div className="space-y-1.5">
@@ -151,6 +160,17 @@ export default function StatsPanel({ stats, alerts }: Props) {
               </div>
             ))
           )}
+        </div>
+        {/* Legend */}
+        <div className="mt-3 pt-3 border-t border-border flex items-center gap-4 text-[10px] font-mono text-muted-foreground">
+          <div className="flex items-center gap-1.5">
+            <span className="inline-block w-2.5 h-2.5 rounded-sm border-2 border-primary" />
+            Adult (cyan box)
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="inline-block w-2.5 h-2.5 rounded-sm border-2 border-warning" />
+            Child (yellow box)
+          </div>
         </div>
       </div>
     </div>
