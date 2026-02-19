@@ -9,6 +9,8 @@ export interface DetectionStats {
   totalOut: number;
   peakCount: number;
   detections: cocoSsd.DetectedObject[];
+  childCount: number;
+  adultCount: number;
 }
 
 interface Props {
@@ -33,6 +35,8 @@ const WebcamDetector = forwardRef<WebcamHandle, Props>(
       totalOut: 0,
       peakCount: 0,
       detections: [],
+      childCount: 0,
+      adultCount: 0,
     });
     const prevCountRef = useRef(0);
     const personHistoryRef = useRef<Map<string, { positions: number[][]; firstSeen: number }>>(new Map());
@@ -163,7 +167,49 @@ const WebcamDetector = forwardRef<WebcamHandle, Props>(
         return;
       }
 
-      const people = predictions.filter((p) => p.class === "person" && p.score > 0.5);
+      // ── Shadow & noise rejection helper ──────────────────────────────
+      // Shadows are typically wide & flat (low height-to-width ratio) and
+      // very large relative to the frame. Real people (incl. children) are
+      // taller than they are wide and occupy a reasonable area.
+      const frameArea = canvas.width * canvas.height;
+      const isRealPerson = (bbox: number[]): boolean => {
+        const [, , w, h] = bbox;
+        const aspectRatio = h / (w || 1);          // real people: > 0.7
+        const areaRatio = (w * h) / (frameArea || 1); // shadow can be > 40% of frame
+        const minDim = Math.min(w, h);
+
+        // Reject if too flat (shadow) or tiny (noise) or unrealistically huge
+        if (aspectRatio < 0.55) return false;       // too wide → shadow / lying object
+        if (areaRatio > 0.70) return false;         // > 70% of frame → almost certainly shadow
+        if (minDim < 25) return false;              // too small → pixel noise
+        return true;
+      };
+
+      // Children score a bit lower in COCO-SSD — threshold 0.40 + shape filter
+      // Adults stay at 0.50 + shape filter. Both go through isRealPerson.
+      const rawPeople = predictions.filter(
+        (p) => p.class === "person" && p.score > 0.40
+      );
+
+      // Classify each detection
+      type PersonDetection = { obj: (typeof rawPeople)[0]; isChild: boolean };
+      const classified: PersonDetection[] = rawPeople
+        .filter((p) => isRealPerson(p.bbox))
+        .map((p) => {
+          const [, , w, h] = p.bbox;
+          // Children tend to have smaller bboxes and lower confidence
+          const areaRatio = (w * h) / (frameArea || 1);
+          const isChild =
+            p.score < 0.60 &&          // lower confidence is common for children
+            areaRatio < 0.12 &&        // smaller frame footprint
+            h / (w || 1) > 0.85;       // upright posture preserved
+          // Adults need stricter confidence (>= 0.50)
+          if (!isChild && p.score < 0.50) return null;
+          return { obj: p, isChild };
+        })
+        .filter(Boolean) as PersonDetection[];
+
+      const people = classified.map((c) => c.obj);
 
       const ctx = canvas.getContext("2d")!;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -229,27 +275,34 @@ const WebcamDetector = forwardRef<WebcamHandle, Props>(
         if (now - val.firstSeen > 60000 && val.positions.length < 2) history.delete(key);
       }
 
-      // Draw detection boxes
-      people.forEach((person, i) => {
+      // ── Draw detection boxes (adults = cyan, children = yellow) ──────
+      classified.forEach((det, i) => {
+        const { obj: person, isChild } = det;
         const [x, y, w, h] = person.bbox;
         const confidence = Math.round(person.score * 100);
 
-        ctx.strokeStyle = "hsl(185, 80%, 50%)";
+        const mainColor = isChild ? "hsl(48, 95%, 58%)" : "hsl(185, 80%, 50%)";
+        const brightColor = isChild ? "hsl(48, 95%, 72%)" : "hsl(185, 80%, 65%)";
+        const labelBg = isChild ? "hsla(48, 95%, 58%, 0.90)" : "hsla(185, 80%, 50%, 0.85)";
+        const typeTag = isChild ? "CHILD" : "PERSON";
+
+        ctx.strokeStyle = mainColor;
         ctx.lineWidth = 2;
         ctx.strokeRect(x, y, w, h);
 
+        // Corner brackets
         const cl = 12;
-        ctx.strokeStyle = "hsl(185, 80%, 65%)";
+        ctx.strokeStyle = brightColor;
         ctx.lineWidth = 3;
         ctx.beginPath(); ctx.moveTo(x, y + cl); ctx.lineTo(x, y); ctx.lineTo(x + cl, y); ctx.stroke();
         ctx.beginPath(); ctx.moveTo(x + w - cl, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + cl); ctx.stroke();
         ctx.beginPath(); ctx.moveTo(x, y + h - cl); ctx.lineTo(x, y + h); ctx.lineTo(x + cl, y + h); ctx.stroke();
         ctx.beginPath(); ctx.moveTo(x + w - cl, y + h); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w, y + h - cl); ctx.stroke();
 
-        const label = `P-${i + 1} ${confidence}%`;
+        const label = `${typeTag}-${i + 1} ${confidence}%`;
         ctx.font = "12px JetBrains Mono, monospace";
         const tw = ctx.measureText(label).width;
-        ctx.fillStyle = "hsla(185, 80%, 50%, 0.85)";
+        ctx.fillStyle = labelBg;
         ctx.fillRect(x, y - 20, tw + 8, 18);
         ctx.fillStyle = "hsl(220, 20%, 7%)";
         ctx.fillText(label, x + 4, y - 6);
@@ -272,10 +325,14 @@ const WebcamDetector = forwardRef<WebcamHandle, Props>(
       });
 
       const currentCount = people.length;
+      const childCount = classified.filter((c) => c.isChild).length;
+      const adultCount = currentCount - childCount;
       const stats = statsRef.current;
       if (currentCount > prevCountRef.current) stats.totalIn += currentCount - prevCountRef.current;
       else if (currentCount < prevCountRef.current && prevCountRef.current > 0) stats.totalOut += prevCountRef.current - currentCount;
       stats.currentCount = currentCount;
+      stats.childCount = childCount;
+      stats.adultCount = adultCount;
       if (currentCount > stats.peakCount) stats.peakCount = currentCount;
       stats.detections = people;
       prevCountRef.current = currentCount;
